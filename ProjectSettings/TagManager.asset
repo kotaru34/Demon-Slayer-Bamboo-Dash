@@ -8,13 +8,13 @@ TagManager:
   - Default
   - TransparentFX
   - Ignore Raycast
-  - 
+  - Obstacles
   - Water
   - UI
-  - 
-  - 
-  - 
-  - 
+  - EnemiesBody
+  - Player
+  - EnemyHit
+  - Collectibles
   - 
   - 
   - 

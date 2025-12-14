@@ -1,69 +1,173 @@
 using UnityEngine;
 
-public class LevelGenerator : MonoBehaviour
+public class LevelGenerator2D : MonoBehaviour
 {
-    [SerializeField] private int decorationCount = 80;
-    [SerializeField] private int collectibleCount = 10;
-    [SerializeField] private Vector2 areaSize = new Vector2(14f, 8f);
-    [SerializeField] private Sprite[] decorationSprites;
-    [SerializeField] private Sprite[] collectibleFrames;
+  public Transform player;
+  public Camera mainCamera;
 
-    public void Configure(Sprite[] decorations, Sprite[] collectibles, Vector2 bounds)
+  public Vector2 playAreaSize = new Vector2(50f, 50f);
+
+  public GameObject[] decorPrefabs;
+  public GameObject[] obstaclePrefabs;
+  public GameObject[] enemyPrefabs;
+
+  public int decorCount = 150;
+  public int obstacleCount = 25;
+  public int enemyCount = 10;
+  public Vector2 playerSpawnHint = Vector2.zero;
+  public float playerSafeRadius = 4f;
+  public float spawnCheckRadius = 0.45f;
+  public int maxAttemptsPerObject = 40;
+
+  public LayerMask blockingMask;
+
+  public Transform decorParent;
+  public Transform obstaclesParent;
+  public Transform enemiesParent;
+
+  public bool disableDecorColliders = true;
+  public bool forceObstaclesStatic = true;
+  public bool autoBindCameraToPlayer = true;
+
+  private void Awake()
+  {
+    if (player == null)
     {
-        decorationSprites = decorations;
-        collectibleFrames = collectibles;
-        areaSize = bounds;
+      GameObject p = GameObject.FindGameObjectWithTag("Player");
+      if (p != null) player = p.transform;
     }
 
-    public void Generate()
+    if (mainCamera == null) mainCamera = Camera.main;
+
+    EnsureParents();
+  }
+
+  private void Start()
+  {
+    GenerateLevel();
+  }
+
+  public void GenerateLevel()
+  {
+    SpawnBatch(obstaclePrefabs, obstacleCount, obstaclesParent, avoidBlocking: true, avoidPlayerRadius: playerSafeRadius);
+    SpawnBatch(enemyPrefabs, enemyCount, enemiesParent, avoidBlocking: true, avoidPlayerRadius: playerSafeRadius);
+    SpawnBatch(decorPrefabs, decorCount, decorParent, avoidBlocking: true, avoidPlayerRadius: 0f);
+
+    if (player != null)
     {
-        SpawnDecorations();
-        SpawnCollectibles();
+      Vector3 safePos = FindFreePosition(playerSpawnHint, radius: 6f, attempts: 120, checkR: spawnCheckRadius, mask: blockingMask);
+      player.position = new Vector3(safePos.x, safePos.y, 0f);
     }
 
-    private void SpawnDecorations()
+    if (autoBindCameraToPlayer && mainCamera != null && player != null)
     {
-        if (decorationSprites == null || decorationSprites.Length == 0)
+      var follow = mainCamera.GetComponent<CameraFollowClamp2D>();
+      if (follow != null) follow.target = player;
+
+      if (Mathf.Approximately(mainCamera.transform.position.z, 0f))
+      {
+        var cp = mainCamera.transform.position;
+        mainCamera.transform.position = new Vector3(cp.x, cp.y, -10f);
+      }
+    }
+  }
+
+  private void SpawnBatch(GameObject[] prefabs, int count, Transform parent, bool avoidBlocking, float avoidPlayerRadius)
+  {
+    if (prefabs == null || prefabs.Length == 0 || count <= 0) return;
+
+    for (int i = 0; i < count; i++)
+    {
+      bool spawned = false;
+
+      for (int attempt = 0; attempt < maxAttemptsPerObject; attempt++)
+      {
+        Vector3 pos = RandomPositionInArea();
+
+        Vector2 playerCenter = (player != null) ? (Vector2)player.position : playerSpawnHint;
+        if (avoidPlayerRadius > 0f && Vector2.Distance((Vector2)pos, playerCenter) < avoidPlayerRadius)
+          continue;
+
+        if (avoidBlocking)
         {
-            return;
+          if (Physics2D.OverlapCircle(pos, spawnCheckRadius, blockingMask) != null)
+            continue;
         }
 
-        for (int i = 0; i < decorationCount; i++)
+        GameObject prefab = prefabs[Random.Range(0, prefabs.Length)];
+        GameObject obj = Instantiate(prefab, pos, Quaternion.identity, parent);
+
+        var variant = obj.GetComponent<RandomSpriteVariant>();
+        if (variant != null) variant.Randomize();
+
+        if (disableDecorColliders && IsOneOf(prefabs, decorPrefabs))
         {
-            var sprite = decorationSprites[Random.Range(0, decorationSprites.Length)];
-            var decor = new GameObject($"Decor_{i}");
-            decor.transform.SetParent(transform);
-            var renderer = decor.AddComponent<SpriteRenderer>();
-            renderer.sprite = sprite;
-            renderer.sortingOrder = -2;
-            decor.transform.position = RandomPosition();
+            DisableAllColliders(obj);
         }
-    }
 
-    private void SpawnCollectibles()
-    {
-        for (int i = 0; i < collectibleCount; i++)
+        if (forceObstaclesStatic && IsOneOf(prefabs, obstaclePrefabs))
         {
-            var collectible = new GameObject($"Collectible_{i}");
-            collectible.transform.SetParent(transform);
-            var renderer = collectible.AddComponent<SpriteRenderer>();
-            renderer.sortingOrder = 1;
-
-            var collider = collectible.AddComponent<CircleCollider2D>();
-            collider.radius = 0.2f;
-            collider.isTrigger = true;
-
-            var collectibleScript = collectible.AddComponent<Collectible>();
-            collectibleScript.ConfigureAnimation(collectibleFrames, 6f);
-
-            collectible.transform.position = RandomPosition();
+            ForceStaticObstacle(obj);
         }
-    }
 
-    private Vector2 RandomPosition()
-    {
-        float x = Random.Range(-areaSize.x * 0.5f, areaSize.x * 0.5f);
-        float y = Random.Range(-areaSize.y * 0.5f, areaSize.y * 0.5f);
-        return new Vector2(x, y);
+        spawned = true;
+        break;
+      }
+
+      if (!spawned) { }
     }
+  }
+
+  private Vector3 FindFreePosition(Vector2 center, float radius, int attempts, float checkR, LayerMask mask)
+  {
+    for (int i = 0; i < attempts; i++)
+    {
+      Vector2 p = center + Random.insideUnitCircle * radius;
+      if (Physics2D.OverlapCircle(p, checkR, mask) == null)
+          return new Vector3(p.x, p.y, 0f);
+    }
+    return new Vector3(center.x, center.y, 0f);
+  }
+
+  private Vector3 RandomPositionInArea()
+  {
+    float x = Random.Range(-playAreaSize.x / 2f, playAreaSize.x / 2f);
+    float y = Random.Range(-playAreaSize.y / 2f, playAreaSize.y / 2f);
+    return new Vector3(x, y, 0f);
+  }
+
+  private void EnsureParents()
+  {
+    if (decorParent == null) decorParent = CreateOrFind("Decor");
+    if (obstaclesParent == null) obstaclesParent = CreateOrFind("Obstacles");
+    if (enemiesParent == null) enemiesParent = CreateOrFind("Enemies");
+  }
+
+  private Transform CreateOrFind(string name)
+  {
+    Transform t = transform.Find(name);
+    if (t != null) return t;
+
+    GameObject go = new GameObject(name);
+    go.transform.SetParent(transform);
+    go.transform.localPosition = Vector3.zero;
+    return go.transform;
+  }
+
+  private void DisableAllColliders(GameObject obj)
+  {
+    var cols = obj.GetComponentsInChildren<Collider2D>(true);
+    foreach (var c in cols) c.enabled = false;
+  }
+
+  private void ForceStaticObstacle(GameObject obj)
+  {
+    var rb = obj.GetComponent<Rigidbody2D>();
+    if (rb != null) rb.bodyType = RigidbodyType2D.Static;
+  }
+
+  private bool IsOneOf(GameObject[] pickedFrom, GameObject[] group)
+  {
+    return pickedFrom == group;
+  }
 }
